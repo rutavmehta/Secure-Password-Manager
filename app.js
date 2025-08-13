@@ -176,7 +176,7 @@ class PasswordManagerApp {
         }
     }
 
-    // Register user with Supabase
+    // Register user with Supabase - No email verification required
     async registerWithSupabase(email, password, username) {
         if (!this.supabase) return null;
         
@@ -187,20 +187,22 @@ class PasswordManagerApp {
                 options: {
                     data: {
                         username: username
-                    }
+                    },
+                    emailRedirectTo: undefined // Disable email verification
                 }
             });
             
             if (error) throw error;
             
-            // Also manually insert into profiles if trigger fails
+            // Also manually insert into profiles
             if (data.user) {
                 try {
                     await this.supabase
                         .from('profiles')
                         .insert({
                             id: data.user.id,
-                            username: username
+                            username: username,
+                            email: email
                         });
                 } catch (profileError) {
                     console.warn('Profile creation failed (trigger might have handled it):', profileError);
@@ -216,39 +218,38 @@ class PasswordManagerApp {
 
     // Login user with Supabase - supports both email and username
     async loginWithSupabase(loginInput, password) {
-    if (!this.supabase) return null;
+        if (!this.supabase) return null;
 
-    try {
-        let email = loginInput;
+        try {
+            let email = loginInput;
 
-        // If input doesn't contain '@', treat as username and retrieve email from profiles
-        if (!loginInput.includes('@')) {
-            const { data: profile, error: profileError } = await this.supabase
-                .from('profiles')
-                .select('email')
-                .eq('username', loginInput)
-                .maybeSingle();
+            // If input doesn't contain '@', treat as username and retrieve email from profiles
+            if (!loginInput.includes('@')) {
+                const { data: profile, error: profileError } = await this.supabase
+                    .from('profiles')
+                    .select('email')
+                    .eq('username', loginInput)
+                    .maybeSingle();
 
-            if (profileError || !profile) {
-                throw new Error('User not found');
+                if (profileError || !profile) {
+                    throw new Error('User not found');
+                }
+                email = profile.email;
             }
-            email = profile.email;
+
+            const { data, error } = await this.supabase.auth.signInWithPassword({
+                email,
+                password
+            });
+
+            if (error) throw error;
+            return data;
+
+        } catch (error) {
+            console.error('Error logging in:', error);
+            throw error;
         }
-
-        const { data, error } = await this.supabase.auth.signInWithPassword({
-            email,
-            password
-        });
-
-        if (error) throw error;
-        return data;
-
-    } catch (error) {
-        console.error('Error logging in:', error);
-        throw error;
     }
-}
-
 
     // Logout user from Supabase
     async logoutFromSupabase() {
@@ -599,7 +600,7 @@ class PasswordManagerApp {
         }
     }
 
-    // Handle user registration
+    // Handle user registration - Simplified without email verification
     async handleRegistration() {
         const usernameInput = document.getElementById('registerUsername');
         const emailInput = document.getElementById('registerEmail');
@@ -633,15 +634,18 @@ class PasswordManagerApp {
             if (this.supabase) {
                 const authData = await this.registerWithSupabase(email, password, username);
                 if (authData && authData.user) {
-                    this.showToast('Account created successfully! Please check your email for verification.', 'success');
-                    this.switchAuthForm('login');
+                    // Registration successful - automatically log the user in
+                    this.currentUser = {
+                        id: authData.user.id,
+                        username: username,
+                        email: authData.user.email,
+                        createdAt: authData.user.created_at
+                    };
+                    this.isAuthenticated = true;
                     
-                    // Pre-fill login form
-                    const loginUsernameInput = document.getElementById('loginUsername');
-                    if (loginUsernameInput) {
-                        loginUsernameInput.value = email;
-                    }
-                    
+                    this.showToast(`Welcome to Password Manager, ${username}!`, 'success');
+                    this.showMainApp();
+                    await this.loadUserPasswords();
                     this.setAuthButtonLoading(submitBtn, false);
                     return;
                 }
@@ -660,20 +664,17 @@ class PasswordManagerApp {
                 this.users.push(newUser);
                 this.saveLocalData();
                 
-                this.showToast('Account created successfully!', 'success');
-                this.switchAuthForm('login');
+                // Auto-login the user after registration
+                this.currentUser = newUser;
+                this.isAuthenticated = true;
                 
-                // Pre-fill login form
-                const loginUsernameInput = document.getElementById('loginUsername');
-                if (loginUsernameInput) {
-                    loginUsernameInput.value = username;
-                }
-                
+                this.showToast(`Welcome to Password Manager, ${username}!`, 'success');
+                this.showMainApp();
                 this.setAuthButtonLoading(submitBtn, false);
             }, 1500);
         } catch (error) {
             console.error('Registration error:', error);
-            this.showToast('Registration failed. Please try again.', 'error');
+            this.showToast(error.message || 'Registration failed. Please try again.', 'error');
             this.setAuthButtonLoading(submitBtn, false);
         }
     }
