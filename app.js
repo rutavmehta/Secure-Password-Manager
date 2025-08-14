@@ -177,45 +177,46 @@ class PasswordManagerApp {
     }
 
     // Register user with Supabase - No email verification required
-    async registerWithSupabase(email, password, username) {
-        if (!this.supabase) return null;
-        
-        try {
-            const { data, error } = await this.supabase.auth.signUp({
-                email: email,
-                password: password,
-                options: {
-                    data: {
-                        username: username
-                    },
-                    emailRedirectTo: undefined // Disable email verification
-                }
-            });
-            
-            if (error) throw error;
-            
-            // Also manually insert into profiles
-            if (data.user) {
-                try {
-                    await this.supabase
-                        .from('profiles')
-                        .insert({
-                            id: data.user.id,
-                            username: username,
-                            email: email
-                        });
-                } catch (profileError) {
-                    console.warn('Profile creation failed (trigger might have handled it):', profileError);
-                }
+async registerWithSupabase(email, password, username) {
+    if (!this.supabase) return null;
+    
+    try {
+        const { data, error } = await this.supabase.auth.signUp({
+            email: email,
+            password: password,
+            options: {
+                data: {
+                    username: username
+                },
+                // Disable email confirmation
+                emailRedirectTo: null
             }
-            
-            return data;
-        } catch (error) {
-            console.error('Error registering user:', error);
-            throw error;
+        });
+        
+        if (error) throw error;
+        
+        // Also manually insert into profiles
+        if (data.user) {
+            try {
+                await this.supabase
+                    .from('profiles')
+                    .insert({
+                        id: data.user.id,
+                        username: username,
+                        email: email
+                    });
+            } catch (profileError) {
+                console.warn('Profile creation failed (trigger might have handled it):', profileError);
+            }
         }
+        
+        return data;
+    } catch (error) {
+        console.error('Error registering user:', error);
+        throw error;
     }
-
+}
+    
     // Login user with Supabase - supports both email and username
     async loginWithSupabase(loginInput, password) {
         if (!this.supabase) return null;
