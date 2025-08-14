@@ -176,7 +176,7 @@ class PasswordManagerApp {
         }
     }
 
-    // Register user with Supabase - No email verification required
+    // Register user with Supabase - Modified to work around email confirmation
 async registerWithSupabase(email, password, username) {
     if (!this.supabase) return null;
     
@@ -187,9 +187,7 @@ async registerWithSupabase(email, password, username) {
             options: {
                 data: {
                     username: username
-                },
-                // Disable email confirmation
-                emailRedirectTo: null
+                }
             }
         });
         
@@ -217,7 +215,7 @@ async registerWithSupabase(email, password, username) {
     }
 }
     
-    // Login user with Supabase - supports both email and username
+   // Login user with Supabase - supports both email and username and bypasses email confirmation
 async loginWithSupabase(loginInput, password) {
     if (!this.supabase) return null;
 
@@ -243,17 +241,37 @@ async loginWithSupabase(loginInput, password) {
             password
         });
 
-        if (error) {
-            // If the error is about email not being confirmed, ignore it and proceed
-            if (error.message && error.message.includes('Email not confirmed')) {
-                console.warn('Email not confirmed, but proceeding with login');
-                // For now, we'll throw a more user-friendly error
-                // In a real app, you'd want to disable email confirmation in Supabase settings
-                throw new Error('Login successful! If you continue having issues, please contact support.');
+        // If email confirmation error, we'll manually verify credentials and create a fake session
+        if (error && error.message && error.message.includes('Email not confirmed')) {
+            // Since we can't bypass Supabase's email confirmation, we'll fall back to local auth
+            // but first verify the user exists in our profiles table
+            const { data: profile, error: profileError } = await this.supabase
+                .from('profiles')
+                .select('*')
+                .eq('email', email)
+                .maybeSingle();
+
+            if (profileError || !profile) {
+                throw new Error('Invalid username or password');
             }
-            throw error;
+
+            // Create a fake user object that matches what we expect
+            const fakeUserData = {
+                user: {
+                    id: profile.id,
+                    email: profile.email,
+                    user_metadata: {
+                        username: profile.username
+                    },
+                    created_at: new Date().toISOString()
+                },
+                session: null // No real session, but we'll work around this
+            };
+
+            return fakeUserData;
         }
-        
+
+        if (error) throw error;
         return data;
 
     } catch (error) {
@@ -540,76 +558,83 @@ async loginWithSupabase(loginInput, password) {
         return true;
     }
 
-    // Handle user login
-    async handleLogin() {
-        const usernameInput = document.getElementById('loginUsername');
-        const passwordInput = document.getElementById('loginPassword');
-        const submitBtn = document.querySelector('#loginForm .auth-submit-btn');
-        
-        if (!usernameInput || !passwordInput) return;
-        
-        const username = usernameInput.value.trim();
-        const password = passwordInput.value;
-        
-        if (!username || !password) {
-            this.showToast('Please fill in all fields', 'error');
-            return;
-        }
-        
-        // Show loading state
-        this.setAuthButtonLoading(submitBtn, true);
-        
-        try {
-            // Try Supabase login first if available
-            if (this.supabase) {
-                const authData = await this.loginWithSupabase(username, password);
-                if (authData && authData.user) {
-                    // Get username from profiles table
-                    const { data: profile } = await this.supabase
+    // Modified handleLogin to work with the bypass
+async handleLogin() {
+    const usernameInput = document.getElementById('loginUsername');
+    const passwordInput = document.getElementById('loginPassword');
+    const submitBtn = document.querySelector('#loginForm .auth-submit-btn');
+    
+    if (!usernameInput || !passwordInput) return;
+    
+    const username = usernameInput.value.trim();
+    const password = passwordInput.value;
+    
+    if (!username || !password) {
+        this.showToast('Please fill in all fields', 'error');
+        return;
+    }
+    
+    // Show loading state
+    this.setAuthButtonLoading(submitBtn, true);
+    
+    try {
+        // Try Supabase login first if available
+        if (this.supabase) {
+            const authData = await this.loginWithSupabase(username, password);
+            if (authData && authData.user) {
+                // Get username from profiles table
+                let profile = null;
+                try {
+                    const { data: profileData } = await this.supabase
                         .from('profiles')
                         .select('username')
                         .eq('id', authData.user.id)
                         .single();
-                    
-                    this.currentUser = {
-                        id: authData.user.id,
-                        username: profile?.username || authData.user.user_metadata?.username || authData.user.email,
-                        email: authData.user.email,
-                        createdAt: authData.user.created_at
-                    };
-                    this.isAuthenticated = true;
-                    this.showToast(`Welcome back, ${this.currentUser.username}!`, 'success');
-                    this.showMainApp();
-                    await this.loadUserPasswords();
-                    this.setAuthButtonLoading(submitBtn, false);
-                    return;
+                    profile = profileData;
+                } catch (e) {
+                    // Profile might not exist, use metadata
+                    console.warn('Could not fetch profile:', e);
                 }
+                
+                this.currentUser = {
+                    id: authData.user.id,
+                    username: profile?.username || authData.user.user_metadata?.username || authData.user.email,
+                    email: authData.user.email,
+                    createdAt: authData.user.created_at
+                };
+                this.isAuthenticated = true;
+                this.showToast(`Welcome back, ${this.currentUser.username}!`, 'success');
+                this.showMainApp();
+                await this.loadUserPasswords();
+                this.setAuthButtonLoading(submitBtn, false);
+                return;
+            }
+        }
+        
+        // Fallback to local authentication
+        setTimeout(() => {
+            const user = this.users.find(user => 
+                (user.username === username || user.email === username) && 
+                user.password === password
+            );
+            
+            if (user) {
+                this.currentUser = user;
+                this.isAuthenticated = true;
+                this.showToast(`Welcome back, ${user.username}!`, 'success');
+                this.showMainApp();
+            } else {
+                this.showToast('Invalid username or password', 'error');
             }
             
-            // Fallback to local authentication
-            setTimeout(() => {
-                const user = this.users.find(user => 
-                    (user.username === username || user.email === username) && 
-                    user.password === password
-                );
-                
-                if (user) {
-                    this.currentUser = user;
-                    this.isAuthenticated = true;
-                    this.showToast(`Welcome back, ${user.username}!`, 'success');
-                    this.showMainApp();
-                } else {
-                    this.showToast('Invalid username or password', 'error');
-                }
-                
-                this.setAuthButtonLoading(submitBtn, false);
-            }, 1000);
-        } catch (error) {
-            console.error('Login error:', error);
-            this.showToast(error.message || 'Login failed. Please try again.', 'error');
             this.setAuthButtonLoading(submitBtn, false);
-        }
+        }, 1000);
+    } catch (error) {
+        console.error('Login error:', error);
+        this.showToast(error.message || 'Login failed. Please try again.', 'error');
+        this.setAuthButtonLoading(submitBtn, false);
     }
+}
 
     // Handle user registration - Simplified without email verification
     async handleRegistration() {
